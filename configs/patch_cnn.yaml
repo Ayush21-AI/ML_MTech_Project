@@ -1,0 +1,9 @@
+model:
+  name: patch_cnn
+  patch_size: 4
+  embed_dim: 128
+  depth: 6
+
+optimizer:
+  learning_rate: 0.001
+  weight_decay: 0.005

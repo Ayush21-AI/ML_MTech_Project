@@ -18,9 +18,14 @@ ENV/
 
 # Data / artifacts
 data/
+checkpoints/
 *.tar.gz
 *.png
 *.jpg
+*.pt
+*.onnx
+wandb/
+mlruns/
 
 # PyCharm / IDE
 .idea/

@@ -1,0 +1,6 @@
+model:
+  name: resnet18
+
+optimizer:
+  learning_rate: 0.001
+  weight_decay: 0.005

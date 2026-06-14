@@ -1,0 +1,65 @@
+seed: 42
+epochs: 50
+use_amp: true
+compile_model: false
+early_stopping_patience: 10
+test_time_augmentation: false
+
+model:
+  name: convmixer
+  patch_size: 2
+  embed_dim: 256
+  depth: 8
+  kernel_size: 5
+  num_heads: 4
+  mlp_dim: 512
+  dropout: 0.1
+  stochastic_depth: 0.0
+  use_cnn_stem: false
+
+data:
+  batch_size: 128
+  num_workers: 4
+  validation_split: 0.1
+  pin_memory: true
+  fast_dev_run: false
+  fast_dev_size: 500
+  seed: 42
+
+augmentation:
+  random_crop: true
+  random_crop_padding: 4
+  random_horizontal_flip: true
+  randaugment: true
+  randaugment_n: 2
+  randaugment_m: 12
+  color_jitter: 0.1
+  random_erasing: 0.25
+  cutmix: true
+  cutmix_alpha: 1.0
+  mixup: true
+  mixup_alpha: 0.2
+  label_smoothing: 0.1
+
+optimizer:
+  optimizer: adamw
+  learning_rate: 0.001
+  weight_decay: 0.005
+  momentum: 0.9
+  scheduler: cosine
+  warmup_epochs: 5
+  lr_min: 0.000001
+  gradient_clip: 1.0
+  use_ema: true
+  ema_decay: 0.9999
+
+logging:
+  experiment_name: cifar10-models
+  run_name: null
+  log_interval: 50
+  use_mlflow: false
+  use_wandb: false
+
+export:
+  opset_version: 17
+  dynamic_batch: true
