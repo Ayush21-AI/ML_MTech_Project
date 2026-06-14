@@ -1,5 +1,9 @@
 """Factory for creating CIFAR-10 models by name."""
 
+from __future__ import annotations
+
+from torch import nn
+
 from cifar10_models.config import ModelConfig
 from cifar10_models.models.convmixer import ConvMixer
 from cifar10_models.models.patch_cnn import PatchBasedCNN

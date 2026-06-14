@@ -133,20 +133,20 @@ def main() -> None:
     model = build_model(config.model)
     logger.info("Model: %s | Params: %.2fM", config.model.name, model.count_parameters() / 1e6)
 
-    history = fit(model, train_loader, val_loader, config)
+    history, eval_model = fit(model, train_loader, val_loader, config)
 
     if rank == 0:
         amp_manager = AMPManager(config.device.type, enabled=config.use_amp)
-        test_loss, test_acc = evaluate(model, test_loader, config.device, amp_manager)
+        test_loss, test_acc = evaluate(eval_model, test_loader, config.device, amp_manager)
         logger.info("Final test accuracy: %.4f", test_acc)
 
         if args.test_tta:
-            tta_acc = evaluate_with_tta(model, test_loader, config.device, tta_level=2, amp_manager=amp_manager)
+            tta_acc = evaluate_with_tta(eval_model, test_loader, config.device, tta_level=2, amp_manager=amp_manager)
             logger.info("TTA test accuracy: %.4f", tta_acc)
 
         if args.export_onnx:
             export_path = config.logging.checkpoint_dir / f"{config.model.name}.onnx"
-            export_to_onnx(model, export_path, config.export.opset_version, config.export.dynamic_batch)
+            export_to_onnx(eval_model, export_path, config.export.opset_version, config.export.dynamic_batch)
 
     if args.distributed:
         cleanup_distributed()

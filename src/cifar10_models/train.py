@@ -24,7 +24,7 @@ from cifar10_models.distributed import get_rank, get_world_size, is_distributed
 from cifar10_models.evaluate import evaluate_loader
 from cifar10_models.metrics import MetricsTracker
 from cifar10_models.models.model_factory import build_model
-from cifar10_models.optim import AMPManager, EMAModel, get_optimizer, get_scheduler, linear_warmup_lr
+from cifar10_models.optim import AMPManager, EMAModel, get_optimizer, get_scheduler
 
 logger = logging.getLogger("cifar10_models")
 
@@ -42,6 +42,7 @@ def _run_epoch(
     ema: EMAModel | None = None,
     gradient_clip: float = 0.0,
     scheduler: optim.lr_scheduler.LRScheduler | None = None,
+    raw_model: nn.Module | None = None,
 ) -> tuple[float, float]:
     """Run one training or evaluation epoch."""
     is_training = optimizer is not None
@@ -72,7 +73,7 @@ def _run_epoch(
                 amp_manager.step(optimizer)
 
                 if ema is not None:
-                    ema.update(model)
+                    ema.update(raw_model if raw_model is not None else model)
 
                 if scheduler is not None:
                     scheduler.step()
@@ -118,10 +119,16 @@ def fit(
         Training history.
     """
     device = config.device
-    model = model.to(device)
+    raw_model = model.to(device)
     if config.compile_model and hasattr(torch, "compile"):
         logger.info("Compiling model with torch.compile")
-        model = torch.compile(model)
+        raw_model = torch.compile(raw_model)
+
+    if is_distributed():
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        model = DDP(raw_model, device_ids=[device])
+    else:
+        model = raw_model
 
     optimizer = get_optimizer(
         model,
@@ -130,21 +137,17 @@ def fit(
         config.optimizer.weight_decay,
         config.optimizer.momentum,
     )
-    # Store initial learning rates for warmup scaling.
-    for group in optimizer.param_groups:
-        group.setdefault("initial_lr", group["lr"])
 
-    steps_per_epoch = len(train_loader)
-    scheduler, warmup_steps = get_scheduler(
+    scheduler = get_scheduler(
         optimizer,
         config.optimizer.scheduler,
         config.epochs,
-        steps_per_epoch,
+        len(train_loader),
         config.optimizer.warmup_epochs,
         config.optimizer.lr_min,
     )
 
-    ema = EMAModel(model, decay=config.optimizer.ema_decay) if config.optimizer.use_ema else None
+    ema = EMAModel(raw_model, decay=config.optimizer.ema_decay) if config.optimizer.use_ema else None
     amp_manager = AMPManager(device.type, enabled=config.use_amp)
 
     criterion = nn.CrossEntropyLoss(label_smoothing=config.augmentation.label_smoothing)
@@ -167,6 +170,7 @@ def fit(
                 CheckpointCallback(
                     config.logging.checkpoint_dir,
                     config.model.name,
+                    ema=ema,
                 )
             )
             callbacks.append(
@@ -206,21 +210,14 @@ def fit(
         device,
         rank + 1,
         get_world_size(),
-        sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6,
+        sum(p.numel() for p in raw_model.parameters() if p.requires_grad) / 1e6,
     )
 
-    global_step = 0
     for epoch in range(config.epochs):
         if is_distributed() and hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
 
         start = time.time()
-
-        # Warmup LR scaling for cosine scheduler.
-        if config.optimizer.scheduler == "cosine" and warmup_steps > 0:
-            warmup_factor = linear_warmup_lr(1.0, global_step, warmup_steps)
-            for group in optimizer.param_groups:
-                group["lr"] = group["initial_lr"] * warmup_factor
 
         train_loss, train_acc = _run_epoch(
             model,
@@ -234,10 +231,11 @@ def fit(
             config.logging.log_interval,
             ema,
             config.optimizer.gradient_clip,
-            scheduler if config.optimizer.scheduler != "cosine" else None,
+            scheduler,
+            raw_model=raw_model,
         )
 
-        eval_model = ema.ema_model if ema is not None else model
+        eval_model = ema.ema_model if ema is not None else raw_model
         val_loss, val_acc = evaluate_loader(eval_model, val_loader, criterion, device, amp_manager)
 
         history["train_loss"].append(train_loss)
@@ -267,28 +265,63 @@ def fit(
                 time.time() - start,
             )
             for callback in callbacks:
-                callback.on_epoch_end(epoch + 1, model, epoch_metrics)
+                callback.on_epoch_end(epoch + 1, raw_model, ema, epoch_metrics)
 
-        should_stop = any(
-            isinstance(cb, EarlyStoppingCallback) and cb.should_stop for cb in callbacks
-        )
-        if should_stop:
-            break
+        # Broadcast early stopping decision across ranks so they stay in sync.
+        if is_distributed():
+            should_stop = any(
+                isinstance(cb, EarlyStoppingCallback) and cb.should_stop for cb in callbacks
+            )
+            stop_tensor = torch.tensor(should_stop, dtype=torch.uint8, device=device)
+            torch.distributed.all_reduce(stop_tensor, op=torch.distributed.ReduceOp.MAX)
+            if stop_tensor.item():
+                break
+        else:
+            should_stop = any(
+                isinstance(cb, EarlyStoppingCallback) and cb.should_stop for cb in callbacks
+            )
+            if should_stop:
+                break
 
-        global_step += steps_per_epoch
-
-    # Restore best checkpoint on main process.
+    # Restore best checkpoint on main process and broadcast to all ranks.
     checkpoint_dir = config.logging.checkpoint_dir
     best_path = checkpoint_dir / f"{config.model.name}_best.pt"
-    if is_main_process and best_path.is_file():
-        logger.info("Restoring best checkpoint: %s", best_path)
-        state = torch.load(best_path, map_location=device, weights_only=False)
-        model.load_state_dict(state["model_state_dict"])
+    if best_path.is_file():
+        if is_main_process:
+            logger.info("Restoring best checkpoint: %s", best_path)
+            state = torch.load(best_path, map_location=device, weights_only=False)
+        else:
+            state = None
+        if is_distributed():
+            state = _broadcast_state_dict(state, device)
+        raw_model.load_state_dict(state["model_state_dict"])
+        if ema is not None and "ema_state_dict" in state:
+            ema.load_state_dict(state["ema_state_dict"])
 
     for callback in callbacks:
-        callback.on_train_end(model)
+        callback.on_train_end(raw_model)
 
-    return history
+    eval_model = ema.ema_model if ema is not None else raw_model
+    return history, eval_model
+
+
+def _broadcast_state_dict(state: dict | None, device: torch.device) -> dict:
+    """Broadcast a checkpoint state dict from rank 0 to all ranks."""
+    import io
+
+    rank = get_rank()
+    if rank == 0:
+        buffer = io.BytesIO()
+        torch.save(state, buffer)
+        byte_list = [buffer.getvalue()]
+    else:
+        byte_list = [None]
+    torch.distributed.broadcast_object_list(byte_list, src=0)
+    if rank != 0:
+        buffer = io.BytesIO(byte_list[0])
+        state = torch.load(buffer, map_location=device, weights_only=False)
+    assert state is not None
+    return state
 
 
 def load_checkpoint(model: nn.Module, checkpoint_path: Path) -> nn.Module:

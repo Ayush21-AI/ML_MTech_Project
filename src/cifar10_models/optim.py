@@ -6,7 +6,12 @@ import math
 
 import torch
 from torch import nn, optim
-from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR,
+    LinearLR,
+    OneCycleLR,
+    SequentialLR,
+)
 
 
 def get_optimizer(
@@ -43,28 +48,40 @@ def get_scheduler(
     steps_per_epoch: int,
     warmup_epochs: int,
     lr_min: float,
-) -> tuple[optim.lr_scheduler.LRScheduler | None, int]:
-    """Create a learning-rate scheduler.
+) -> optim.lr_scheduler.LRScheduler | None:
+    """Create a learning-rate scheduler with optional linear warmup.
+
+    For the ``cosine`` scheduler, linear warmup is followed by cosine decay,
+    all stepped per batch.
 
     Returns
     -------
-    tuple
-        ``(scheduler, warmup_steps)``. ``scheduler`` may be ``None``.
+    optim.lr_scheduler.LRScheduler | None
+        The scheduler, or ``None`` for ``scheduler_name == "none"``.
     """
     total_steps = epochs * steps_per_epoch
     warmup_steps = warmup_epochs * steps_per_epoch
 
     if scheduler_name == "cosine":
-        # Warmup is handled manually in the training loop; scheduler starts after warmup.
-        scheduler = CosineAnnealingLR(
+        warmup_scheduler = LinearLR(
+            optimizer,
+            start_factor=1e-3,
+            end_factor=1.0,
+            total_iters=max(warmup_steps, 1),
+        )
+        cosine_scheduler = CosineAnnealingLR(
             optimizer,
             T_max=max(total_steps - warmup_steps, 1),
             eta_min=lr_min,
         )
-        return scheduler, warmup_steps
+        return SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_steps],
+        )
 
     if scheduler_name == "onecycle":
-        scheduler = OneCycleLR(
+        return OneCycleLR(
             optimizer,
             max_lr=[pg["lr"] for pg in optimizer.param_groups],
             total_steps=total_steps,
@@ -72,20 +89,8 @@ def get_scheduler(
             div_factor=25.0,
             final_div_factor=1e4,
         )
-        return scheduler, 0
 
-    return None, 0
-
-
-def linear_warmup_lr(
-    base_lr: float,
-    step: int,
-    warmup_steps: int,
-) -> float:
-    """Compute a linear warmup multiplier."""
-    if warmup_steps == 0:
-        return 1.0
-    return min(1.0, step / warmup_steps)
+    return None
 
 
 class EMAModel:

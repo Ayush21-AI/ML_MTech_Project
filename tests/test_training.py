@@ -35,11 +35,11 @@ def test_fast_training_run() -> None:
     )
     model = build_model(config.model)
 
-    history = fit(model, train_loader, val_loader, config)
+    history, eval_model = fit(model, train_loader, val_loader, config)
 
     assert len(history["train_loss"]) == 1
     assert len(history["val_acc"]) == 1
 
     amp_manager = AMPManager(config.device.type, enabled=False)
-    test_loss, test_acc = evaluate(model, test_loader, config.device, amp_manager)
+    test_loss, test_acc = evaluate(eval_model, test_loader, config.device, amp_manager)
     assert 0 <= test_acc <= 1

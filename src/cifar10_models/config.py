@@ -101,8 +101,8 @@ class OptimizerConfig:
 class LoggingConfig:
     """Experiment tracking and checkpointing settings."""
 
-    project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parents[3])
-    checkpoint_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[3] / "checkpoints")
+    project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2])
+    checkpoint_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2] / "checkpoints")
     log_interval: int = 50
     use_mlflow: bool = False
     use_wandb: bool = False

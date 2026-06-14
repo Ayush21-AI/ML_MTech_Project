@@ -16,6 +16,7 @@ from cifar10_models.augmentation import (
     build_test_transforms,
     build_train_transforms,
 )
+from cifar10_models.config import get_device
 from cifar10_models.distributed import get_distributed_sampler
 
 logger = logging.getLogger("cifar10_models")
@@ -192,12 +193,15 @@ def get_dataloaders(
         mixup=augmentation_cfg.mixup and use_cutmix_mixup,
     )
 
+    # pin_memory only helps on CUDA; on MPS/CPU it can warn or slow things down.
+    should_pin = data_cfg.pin_memory and get_device().type == "cuda"
+
     train_loader = DataLoader(
         train_subset,
         batch_size=data_cfg.batch_size,
         sampler=train_sampler,
         num_workers=data_cfg.num_workers,
-        pin_memory=data_cfg.pin_memory and torch.device(get_device()).type != "cpu",
+        pin_memory=should_pin,
         drop_last=not data_cfg.fast_dev_run,
         collate_fn=cutmix_collator,
     )
@@ -206,7 +210,7 @@ def get_dataloaders(
         batch_size=data_cfg.batch_size,
         sampler=val_sampler,
         num_workers=data_cfg.num_workers,
-        pin_memory=data_cfg.pin_memory and torch.device(get_device()).type != "cpu",
+        pin_memory=should_pin,
         drop_last=False,
     )
     test_loader = DataLoader(
@@ -214,7 +218,7 @@ def get_dataloaders(
         batch_size=data_cfg.batch_size,
         sampler=test_sampler,
         num_workers=data_cfg.num_workers,
-        pin_memory=data_cfg.pin_memory and torch.device(get_device()).type != "cpu",
+        pin_memory=should_pin,
         drop_last=False,
     )
 

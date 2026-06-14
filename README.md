@@ -82,6 +82,7 @@ python -m cifar10_models \
   --override data.fast_dev_run=true \
   --override data.fast_dev_size=500 \
   --override epochs=1 \
+  --override data.num_workers=0 \
   --export-onnx \
   --test-tta
 ```
@@ -133,7 +134,7 @@ Switch models by changing `--config`.
 - Best checkpointing, early stopping, and training metrics logging.
 - Test-time augmentation during evaluation.
 - ONNX export with runtime parity check.
-- DDP-ready for multi-GPU training.
+- Distributed training scaffolding: process-group setup, DistributedSampler, and DDP wrapping are wired in for multi-GPU runs.
 
 ## Notes
 

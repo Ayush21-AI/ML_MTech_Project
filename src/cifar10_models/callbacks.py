@@ -20,6 +20,7 @@ class Callback:
         self,
         epoch: int,
         model: nn.Module,
+        ema,
         metrics: dict[str, float],
     ) -> None:
         pass
@@ -38,6 +39,7 @@ class CheckpointCallback(Callback):
         metric: str = "val_acc",
         mode: str = "max",
         save_last: bool = True,
+        ema=None,
     ) -> None:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -45,6 +47,7 @@ class CheckpointCallback(Callback):
         self.metric = metric
         self.mode = mode
         self.save_last = save_last
+        self.ema = ema
         self.best_value = -float("inf") if mode == "max" else float("inf")
         self.best_path: Path | None = None
         self.last_path = self.checkpoint_dir / f"{model_name}_last.pt"
@@ -58,6 +61,7 @@ class CheckpointCallback(Callback):
         self,
         epoch: int,
         model: nn.Module,
+        ema,
         metrics: dict[str, float],
     ) -> None:
         value = metrics.get(self.metric)
@@ -69,6 +73,8 @@ class CheckpointCallback(Callback):
             "metrics": metrics,
             "model_state_dict": model.state_dict(),
         }
+        if ema is not None:
+            state["ema_state_dict"] = ema.state_dict()
 
         if self.save_last:
             torch.save(state, self.last_path)
@@ -111,6 +117,7 @@ class EarlyStoppingCallback(Callback):
         self,
         epoch: int,
         model: nn.Module,
+        ema,
         metrics: dict[str, float],
     ) -> None:
         value = metrics.get(self.metric)
@@ -142,6 +149,7 @@ class MetricsLogger(Callback):
         self,
         epoch: int,
         model: nn.Module,
+        ema,
         metrics: dict[str, float],
     ) -> None:
         record = {"epoch": epoch, **metrics}
@@ -179,6 +187,7 @@ class MLFlowLogger(Callback):
         self,
         epoch: int,
         model: nn.Module,
+        ema,
         metrics: dict[str, float],
     ) -> None:
         if not self._active:
@@ -213,6 +222,7 @@ class WandbLogger(Callback):
         self,
         epoch: int,
         model: nn.Module,
+        ema,
         metrics: dict[str, float],
     ) -> None:
         if not self._active:
